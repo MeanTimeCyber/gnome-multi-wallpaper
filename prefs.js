@@ -53,7 +53,7 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
         // Folder selection. The chosen path is validated before it is saved.
         const folderGroup = new Adw.PreferencesGroup({
             title: 'Wallpaper folder',
-            description: 'Images are searched recursively. Only PNG and JPG files are used.',
+            description: 'Images are searched recursively. Only PNG, JPG, and WebP files are used.',
         });
         const folderRow = new Adw.ActionRow({title: 'Folder', useMarkup: false});
         const chooseButton = new Gtk.Button({label: 'Choose…', valign: Gtk.Align.CENTER});

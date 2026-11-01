@@ -1,11 +1,11 @@
 # Multi Wallpaper
 
-A GNOME Shell extension for GNOME 50 and 51 that scans a selected folder recursively, inspects JPG/PNG images for dimensions and orientation, and assigns wallpapers to logical monitors.
+A GNOME Shell extension for GNOME 50 and 51 that scans a selected folder recursively, inspects JPG/PNG/WebP images for dimensions and orientation, and assigns wallpapers to logical monitors.
 
 ## Features
 
 - Folder picker in the preferences dialog
-- Recursive wallpaper scan of JPG, JPEG, and PNG files
+- Recursive wallpaper scan of JPG, JPEG, PNG, and WebP files
 - Landscape and portrait statistics
 - Logical monitor count with mirrored displays treated as one screen
 - Preferred orientation matching per screen
