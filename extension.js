@@ -346,35 +346,19 @@ function applyWallpaperAssignments(assignments) {
         const primaryAssignment = assignments[0];
         const fileUri = `file://${primaryAssignment.path}`;
 
+        // GNOME exposes background configuration via the public GSettings schema.
+        // There is no stable public GSettings key for assigning unique wallpapers to each
+        // monitor in GNOME 50/51, so we intentionally avoid any private Shell members.
         backgroundSettings.set_string('picture-uri', fileUri);
         backgroundSettings.set_string('picture-uri-dark', fileUri);
         backgroundSettings.set_boolean('draw-background', true);
+
+        logInfo('Applied desktop background via public GSettings configuration', fileUri);
+        return true;
     } catch (error) {
         logInfo('Unable to update desktop background settings', error && error.message ? error.message : String(error));
+        return false;
     }
-
-    const backgroundManager = Main && Main.backgroundManager ? Main.backgroundManager : null;
-    if (backgroundManager && backgroundManager._backgrounds) {
-        const backgrounds = backgroundManager._backgrounds;
-        const monitors = Main.layoutManager && Main.layoutManager.monitors ? Main.layoutManager.monitors : [];
-
-        for (let i = 0; i < monitors.length; i++) {
-            const match = assignments.find(entry => entry.screen && entry.screen.id === i);
-            if (!match)
-                continue;
-
-            const background = backgrounds[i];
-            if (background && typeof background.set_file === 'function') {
-                try {
-                    background.set_file(Gio.File.new_for_path(match.path));
-                } catch (error) {
-                    logInfo('Failed to set per-monitor wallpaper', `${match.path} (${error && error.message ? error.message : String(error)})`);
-                }
-            }
-        }
-    }
-
-    return true;
 }
 
 function refreshWallpaperState() {
