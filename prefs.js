@@ -1,5 +1,6 @@
 const { Adw, Gio, GLib, Gtk } = imports.gi;
 const ExtensionUtils = imports.misc.extensionUtils;
+const Main = imports.ui.main;
 const Me = ExtensionUtils.getCurrentExtension();
 
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.multiwallpaper';
@@ -32,6 +33,43 @@ function getConfiguredFolder(settings) {
     }
 
     return DEFAULT_PICTURES_DIR;
+}
+
+function getLogicalScreenSummary() {
+    const layoutManager = Main && Main.layoutManager ? Main.layoutManager : null;
+    const monitors = layoutManager && layoutManager.monitors ? layoutManager.monitors : [];
+
+    if (!Array.isArray(monitors) || monitors.length === 0)
+        return { total: 1, landscape: 1, portrait: 0 };
+
+    const groups = [];
+    for (let i = 0; i < monitors.length; i++) {
+        const monitor = monitors[i];
+        if (!monitor)
+            continue;
+
+        const width = Number(monitor.width) || 0;
+        const height = Number(monitor.height) || 0;
+        if (width <= 0 || height <= 0)
+            continue;
+
+        const duplicate = groups.some(group =>
+            Math.abs(group.width - width) < 2 &&
+            Math.abs(group.height - height) < 2 &&
+            Math.abs(group.x - Number(monitor.x || 0)) < 2 &&
+            Math.abs(group.y - Number(monitor.y || 0)) < 2
+        );
+
+        if (!duplicate)
+            groups.push({ width, height, x: Number(monitor.x || 0), y: Number(monitor.y || 0) });
+    }
+
+    if (groups.length === 0)
+        return { total: 1, landscape: 1, portrait: 0 };
+
+    const landscape = groups.filter(group => group.height <= group.width).length;
+    const portrait = groups.length - landscape;
+    return { total: groups.length, landscape, portrait };
 }
 
 function isSupportedImageName(name) {
@@ -176,6 +214,19 @@ function buildPrefsWidget() {
     statsRow.add_suffix(statsLabel);
     group.add(statsRow);
 
+    const screenSummaryRow = new Adw.ActionRow({ title: 'Screen layout' });
+    const screenSummaryLabel = new Gtk.Label({
+        xalign: 0,
+        justify: Gtk.Justification.LEFT,
+        selectable: true,
+        wrap: true,
+        hexpand: true,
+        margin_top: 10,
+        margin_bottom: 10,
+    });
+    screenSummaryRow.add_suffix(screenSummaryLabel);
+    group.add(screenSummaryRow);
+
     const changeNowButton = new Gtk.Button({ label: 'Change now', halign: Gtk.Align.END, valign: Gtk.Align.CENTER });
     changeNowButton.connect('clicked', () => {
         if (!settings)
@@ -193,17 +244,26 @@ function buildPrefsWidget() {
     function refreshStats() {
         if (!settings) {
             statsLabel.set_text('Settings unavailable');
+            screenSummaryLabel.set_text('Monitor state unavailable');
             return;
         }
 
         const folder = getConfiguredFolder(settings);
         const stats = collectWallpaperStats(folder);
         const safeFolder = folder && folder.trim() ? folder : DEFAULT_PICTURES_DIR;
+        const summary = getLogicalScreenSummary();
+
         statsLabel.set_text(
             `Folder: ${safeFolder}\n` +
             `Found: ${stats.total} images\n` +
             `Landscape: ${stats.landscape}\n` +
             `Portrait: ${stats.portrait}`
+        );
+
+        screenSummaryLabel.set_text(
+            `Logical screens: ${summary.total}\n` +
+            `Landscape screens: ${summary.landscape}\n` +
+            `Portrait screens: ${summary.portrait}`
         );
     }
 

@@ -21,6 +21,22 @@ function getSettings() {
     }
 }
 
+function setDefaultWallpaperFolderIfNeeded() {
+    const settings = getSettings();
+    if (!settings)
+        return;
+
+    try {
+        const current = settings.get_string('wallpaper-folder');
+        if (!current || !current.trim()) {
+            settings.set_string('wallpaper-folder', getDefaultWallpaperFolder());
+            logInfo('Initialised wallpaper-folder setting to default Pictures directory');
+        }
+    } catch (error) {
+        logInfo('Could not initialise wallpaper-folder setting', error && error.message ? error.message : String(error));
+    }
+}
+
 function getDefaultWallpaperFolder() {
     return DEFAULT_PICTURES_DIR;
 }
@@ -52,7 +68,11 @@ function getFolderPathForSettings() {
 
     try {
         const configured = settings.get_string('wallpaper-folder');
-        return normalizeConfiguredFolder(configured);
+        const normalized = normalizeConfiguredFolder(configured);
+        if (normalized !== configured) {
+            settings.set_string('wallpaper-folder', normalized);
+        }
+        return normalized;
     } catch (error) {
         logInfo('Unable to read wallpaper-folder setting; using Pictures fallback', error && error.message ? error.message : String(error));
         return getDefaultWallpaperFolder();
@@ -186,14 +206,14 @@ function getLogicalScreens() {
             continue;
         }
 
-        const duplicate = groups.some(group =>
+        const mirrored = groups.some(group =>
             Math.abs(group.width - width) < 2 &&
             Math.abs(group.height - height) < 2 &&
             Math.abs(group.x - x) < 2 &&
             Math.abs(group.y - y) < 2
         );
 
-        if (duplicate)
+        if (mirrored)
             continue;
 
         groups.push({
@@ -211,6 +231,8 @@ function getLogicalScreens() {
         return [{ id: 0, x: 0, y: 0, width: 1920, height: 1080, orientation: 'landscape' }];
     }
 
+    const summary = groups.map(screen => `${screen.width}x${screen.height}:${screen.orientation}`).join(', ');
+    logInfo('Monitor layout summary', summary);
     return groups;
 }
 
@@ -365,6 +387,7 @@ class MultiWallpaperExtension {
             return;
         }
 
+        setDefaultWallpaperFolderIfNeeded();
         this._settings.connect('changed::wallpaper-folder', () => {
             logInfo('Wallpaper folder changed; refreshing state');
             this._scheduleNextCheck();
