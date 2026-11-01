@@ -3,10 +3,11 @@
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {ROTATION_SECONDS, log, logError, runRotation} from './lib/wallpaperLogic.js';
+import {ROTATION_SECONDS, isCompositeMissing, log, logError, runRotation} from './lib/wallpaperLogic.js';
 
 const CHECK_INTERVAL_SECONDS = 60;
 const RETRY_SECONDS = 60 * 60;
+const MONITOR_SETTLE_MS = 2000;
 
 export default class MultiWallpaperExtension extends Extension {
     enable() {
@@ -20,6 +21,9 @@ export default class MultiWallpaperExtension extends Extension {
 
         // Changing the folder in preferences rotates immediately, bypassing the 24-hour timer.
         this._folderChangedId = this._settings.connect('changed::wallpaper-folder', () => this._rotate());
+
+        // The composite is sized to the current layout, so rebuild it after displays are added or removed.
+        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => this._scheduleMonitorRotate());
 
         // Keep the timer alive even if one check throws, so a single failure cannot stop future rotations.
         this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CHECK_INTERVAL_SECONDS, () => {
@@ -38,12 +42,32 @@ export default class MultiWallpaperExtension extends Extension {
             GLib.Source.remove(this._timerId);
             this._timerId = 0;
         }
+        if (this._monitorTimerId) {
+            GLib.Source.remove(this._monitorTimerId);
+            this._monitorTimerId = 0;
+        }
+        if (this._monitorsChangedId) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = 0;
+        }
         if (this._settings && this._folderChangedId)
             this._settings.disconnect(this._folderChangedId);
         this._folderChangedId = 0;
         this._settings = null;
         this._retryAfter = 0;
         log('Extension disabled');
+    }
+
+    // Debounced because monitors-changed can fire several times while a layout settles.
+    _scheduleMonitorRotate() {
+        if (this._monitorTimerId)
+            GLib.Source.remove(this._monitorTimerId);
+
+        this._monitorTimerId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, MONITOR_SETTLE_MS, () => {
+            this._monitorTimerId = 0;
+            this._rotate();
+            return GLib.SOURCE_REMOVE;
+        });
     }
 
     _checkDue() {
@@ -53,6 +77,12 @@ export default class MultiWallpaperExtension extends Extension {
         const now = Math.floor(Date.now() / 1000);
         if (now < this._retryAfter)
             return;
+
+        if (isCompositeMissing()) {
+            log('Current wallpaper file is missing; rebuilding');
+            this._rotate();
+            return;
+        }
 
         const last = this._settings.get_int64('last-change-timestamp');
         // A timestamp in the future (clock change) is treated as due rather than blocking rotation.
