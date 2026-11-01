@@ -15,6 +15,7 @@ import {
     getLogicalScreens,
     summarizeScreens,
     runRotation,
+    logError,
 } from './lib/wallpaperLogic.js';
 
 // Read connected monitors from GDK; the Shell's layout manager is not available in this process.
@@ -26,7 +27,10 @@ function readMonitors() {
     const list = display.get_monitors();
     const monitors = [];
     for (let i = 0; i < list.get_n_items(); i++) {
-        const geometry = list.get_item(i).get_geometry();
+        const monitor = list.get_item(i);
+        if (!monitor)
+            continue;
+        const geometry = monitor.get_geometry();
         monitors.push({x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height});
     }
     return monitors;
@@ -84,7 +88,7 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
 
         window.add(page);
 
-        const refresh = () => {
+        const updateRows = () => {
             const resolved = resolveFolder(settings.get_string('wallpaper-folder'));
             folderRow.set_subtitle(resolved.path ?? 'No usable folder');
 
@@ -111,6 +115,15 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
             lastRow.set_subtitle(formatTimestamp(settings.get_int64('last-change-timestamp')));
         };
 
+        // A failed refresh is logged rather than thrown into the GTK signal handler.
+        const refresh = () => {
+            try {
+                updateRows();
+            } catch (error) {
+                logError('Could not refresh preferences', error.message);
+            }
+        };
+
         chooseButton.connect('clicked', () => {
             const dialog = new Gtk.FileDialog({title: 'Choose wallpaper folder', modal: true});
             const current = resolveFolder(settings.get_string('wallpaper-folder')).path;
@@ -122,19 +135,35 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
                 try {
                     file = source.select_folder_finish(asyncResult);
                 } catch (error) {
-                    // The user cancelled the dialog or it failed; nothing to change.
+                    // Cancelling the dialog is normal; any other failure is reported to the user.
+                    const dismissed = typeof error.matches === 'function' &&
+                        error.matches(Gtk.DialogError, Gtk.DialogError.DISMISSED);
+                    if (!dismissed) {
+                        logError('Folder dialog failed', error.message);
+                        window.add_toast(new Adw.Toast({title: 'Could not open the folder chooser.'}));
+                    }
                     return;
                 }
                 if (!file)
                     return;
 
-                const check = validateFolder(file.get_path());
+                const path = file.get_path();
+                if (!path) {
+                    window.add_toast(new Adw.Toast({title: 'Only local folders can be used.'}));
+                    return;
+                }
+
+                const check = validateFolder(path);
                 if (!check.ok) {
                     window.add_toast(new Adw.Toast({title: check.reason}));
                     return;
                 }
 
-                settings.set_string('wallpaper-folder', check.path);
+                if (!settings.set_string('wallpaper-folder', check.path)) {
+                    logError('Could not save folder setting', check.path);
+                    window.add_toast(new Adw.Toast({title: 'Could not save the folder.'}));
+                    return;
+                }
                 refresh();
             });
         });
