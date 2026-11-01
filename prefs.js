@@ -3,6 +3,8 @@ const ExtensionUtils = imports.misc.extensionUtils;
 const Main = imports.ui.main;
 const Me = ExtensionUtils.getCurrentExtension();
 
+// Preferences are intentionally simple: the user picks a safe folder, sees the relevant stats, and can trigger
+// an immediate rotation without needing to understand the internal selection logic.
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.multiwallpaper';
 const DEFAULT_PICTURES_DIR = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) || `${GLib.get_home_dir()}/Pictures`;
 
@@ -11,6 +13,7 @@ function logInfo(message, detail = null) {
     log(`[MultiWallpaper] ${message}${suffix}`);
 }
 
+// Access the settings schema using the supported GNOME extension API.
 function getSettings() {
     try {
         return ExtensionUtils.getSettings(SETTINGS_SCHEMA);
@@ -20,6 +23,8 @@ function getSettings() {
     }
 }
 
+// Preferences should only work with folders under the current user’s home, which keeps the extension local and
+// reduces the chance of a surprising or unsafe scan path.
 function isPathInsideUserHome(path) {
     if (!path || typeof path !== 'string')
         return false;
@@ -32,6 +37,7 @@ function isPathInsideUserHome(path) {
     return trimmed === homeDir || trimmed.startsWith(`${homeDir}/`);
 }
 
+// Return the user-selected folder, or the default Pictures directory when there is no valid setting yet.
 function getConfiguredFolder(settings) {
     if (!settings)
         return DEFAULT_PICTURES_DIR;
@@ -47,6 +53,8 @@ function getConfiguredFolder(settings) {
     return DEFAULT_PICTURES_DIR;
 }
 
+// Summarize the effective monitor layout so users can understand how many logical screens the extension will
+// target, even when mirrored outputs are collapsed into a single display group.
 function getLogicalScreenSummary() {
     const layoutManager = Main && Main.layoutManager ? Main.layoutManager : null;
     const monitors = layoutManager && layoutManager.monitors ? layoutManager.monitors : [];
@@ -84,6 +92,7 @@ function getLogicalScreenSummary() {
     return { total: groups.length, landscape, portrait };
 }
 
+// Limit the scan to the image formats the feature deliberately supports.
 function isSupportedImageName(name) {
     if (!name || typeof name !== 'string')
         return false;
@@ -92,6 +101,7 @@ function isSupportedImageName(name) {
     return lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg');
 }
 
+// Inspect each file once to derive the width, height, and orientation used for matching logic.
 function readImageStats(path) {
     try {
         const pixbuf = imports.gi.GdkPixbuf.Pixbuf.new_from_file(path);
@@ -112,6 +122,8 @@ function readImageStats(path) {
     }
 }
 
+// Gather counts without making any filesystem changes. This allows the UI to show the current state clearly
+// before a wallpaper rotation is triggered.
 function collectWallpaperStats(folderPath) {
     const results = {
         total: 0,
@@ -172,6 +184,7 @@ function collectWallpaperStats(folderPath) {
     return results;
 }
 
+// Provide a user-friendly health signal so the UI can explain whether the folder is usable, empty, or invalid.
 function getFolderHealth(folderPath) {
     if (!folderPath || !folderPath.trim())
         return { valid: false, message: 'No folder selected yet; using your Pictures directory.' };
@@ -187,6 +200,7 @@ function getFolderHealth(folderPath) {
     return { valid: true, message: 'Folder is valid and contains usable wallpapers.' };
 }
 
+// Construct the GNOME Adwaita preference page. This page is intentionally small, clear, and action-oriented.
 function buildPrefsWidget() {
     const settings = getSettings();
     const prefs = new Adw.PreferencesPage();
@@ -267,6 +281,8 @@ function buildPrefsWidget() {
     statusRow.add_suffix(statusLabel);
     group.add(statusRow);
 
+    // Manual rotation is useful for testing and immediate updates, but the button is safely disabled when no
+    // valid wallpaper set exists.
     const changeNowButton = new Gtk.Button({ label: 'Change now', halign: Gtk.Align.END, valign: Gtk.Align.CENTER });
     changeNowButton.connect('clicked', () => {
         if (!settings)

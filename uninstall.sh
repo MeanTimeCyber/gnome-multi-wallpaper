@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Remove the installed extension and disable it in GNOME before deleting the extension directory.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 METADATA_PATH="${SCRIPT_DIR}/metadata.json"
 
@@ -9,6 +10,7 @@ if [[ ! -f "${METADATA_PATH}" ]]; then
     exit 1
 fi
 
+# Derive the extension UUID from metadata.json so the uninstall path matches the live install location.
 UUID="$(python3 - "${METADATA_PATH}" <<'PY'
 import json, sys
 with open(sys.argv[1], 'r', encoding='utf-8') as f:

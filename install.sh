@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+# Install the extension into the GNOME user extension directory and compile the schema so GNOME can load it.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 METADATA_PATH="${SCRIPT_DIR}/metadata.json"
 
@@ -9,6 +10,7 @@ if [[ ! -f "${METADATA_PATH}" ]]; then
     exit 1
 fi
 
+# Read the extension UUID from metadata.json so the install path matches the extension identity exactly.
 UUID="$(python3 - "${METADATA_PATH}" <<'PY'
 import json, sys
 with open(sys.argv[1], 'r', encoding='utf-8') as f:
@@ -27,6 +29,7 @@ mkdir -p "${TARGET_DIR}"
 
 echo "[MultiWallpaper] Installing extension ${UUID} into ${TARGET_DIR}"
 
+# Copy the project into GNOME’s extension directory, skipping installer scripts and local test assets.
 find "${SCRIPT_DIR}" -mindepth 1 -maxdepth 1 \
     ! -name 'install.sh' \
     ! -name 'uninstall.sh' \

@@ -2,16 +2,20 @@ const { GdkPixbuf, Gio, GLib } = imports.gi;
 const ExtensionUtils = imports.misc.extensionUtils;
 const Main = imports.ui.main;
 
+// MultiWallpaper is intentionally conservative: we only touch the user-owned wallpaper
+// folder and use the public desktop background settings schema rather than private Shell internals.
 const LOG_PREFIX = '[MultiWallpaper]';
 const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.multiwallpaper';
 const DEFAULT_ROTATION_SECONDS = 24 * 60 * 60;
 const DEFAULT_PICTURES_DIR = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) || `${GLib.get_home_dir()}/Pictures`;
 
+// Centralized logging keeps shell output readable and helps diagnose folder, image, and screen issues.
 function logInfo(message, detail = null) {
     const suffix = detail ? `: ${detail}` : '';
     log(`${LOG_PREFIX} ${message}${suffix}`);
 }
 
+// Access the extension schema through the supported GNOME Shell settings entry point.
 function getSettings() {
     try {
         return ExtensionUtils.getSettings(SETTINGS_SCHEMA);
@@ -21,6 +25,7 @@ function getSettings() {
     }
 }
 
+// Ensure the first run has a sane starting point. This keeps the UX stable for users who have not configured a folder yet.
 function setDefaultWallpaperFolderIfNeeded() {
     const settings = getSettings();
     if (!settings)
@@ -41,6 +46,8 @@ function getDefaultWallpaperFolder() {
     return DEFAULT_PICTURES_DIR;
 }
 
+// Restrict scanning to the user-controlled home directory. This prevents the extension from exploring
+// arbitrary system paths or user-selected locations outside the intended trust boundary.
 function isPathInsideUserHome(path) {
     if (!path || typeof path !== 'string')
         return false;
@@ -56,6 +63,8 @@ function isPathInsideUserHome(path) {
     return trimmed === homeDir || trimmed.startsWith(`${homeDir}/`);
 }
 
+// Validate folder configuration and fall back to the default Pictures directory when the configured path
+// is missing, invalid, or outside the safe user-home boundary.
 function normalizeConfiguredFolder(folderPath) {
     if (!folderPath || typeof folderPath !== 'string')
         return getDefaultWallpaperFolder();
@@ -85,6 +94,8 @@ function normalizeConfiguredFolder(folderPath) {
     return getDefaultWallpaperFolder();
 }
 
+// Read and normalize the configured folder each time; this keeps the runtime logic resilient if the user
+// chooses a removed directory or a path that no longer exists.
 function getFolderPathForSettings() {
     const settings = getSettings();
     if (!settings)
@@ -103,6 +114,7 @@ function getFolderPathForSettings() {
     }
 }
 
+// Persist rotation state so the extension rotates every 24 hours from the last successful change.
 function setLastChangeTimestamp(timestampSeconds) {
     const settings = getSettings();
     if (!settings)
@@ -115,6 +127,7 @@ function setLastChangeTimestamp(timestampSeconds) {
     }
 }
 
+// Accept only the image types the feature intentionally supports.
 function isSupportedImageName(name) {
     if (!name || typeof name !== 'string')
         return false;
@@ -123,6 +136,8 @@ function isSupportedImageName(name) {
     return lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg');
 }
 
+// Inspect a candidate image and classify it by dimensions. The metadata is used to prioritize matching
+// wallpaper orientation against the logical screen layout.
 function readWallpaperEntry(file) {
     if (!file)
         return null;
@@ -170,6 +185,8 @@ function readWallpaperEntry(file) {
     }
 }
 
+// Recursively enumerate the folder tree, skipping unsupported entries and invalid files to build the
+// pool of wallpapers that can be selected for rotation.
 function collectWallpaperEntries(folderPath) {
     const wallpaperEntries = [];
     const finalFolderPath = normalizeConfiguredFolder(folderPath);
@@ -225,6 +242,8 @@ function collectWallpaperEntries(folderPath) {
     return wallpaperEntries;
 }
 
+// Reduce the current display layout to a logical screen list by collapsing duplicate/mirrored geometry.
+// This gives us one wallpaper target per effective screen rather than per physical output entry.
 function getLogicalScreens() {
     const layoutManager = Main && Main.layoutManager ? Main.layoutManager : null;
     const monitors = layoutManager && layoutManager.monitors ? layoutManager.monitors : [];
@@ -280,6 +299,8 @@ function getLogicalScreens() {
     return groups;
 }
 
+// Rank candidates by orientation match first, then by aspect-ratio fit and image size. This keeps the
+// wallpaper selection deterministic while still preferring bigger, better-fitting images.
 function scoreWallpaperForScreen(screen, candidate) {
     if (!screen || !candidate)
         return 0;
@@ -293,6 +314,9 @@ function scoreWallpaperForScreen(screen, candidate) {
     return orientationScore + sizeScore - (ratioDifference * 1000);
 }
 
+// Assign wallpapers to each logical screen by preferring a matching orientation and then falling back to the
+// other orientation only when necessary. Paths are de-duped so we do not reuse the same wallpaper more than
+// once when a better choice is available.
 function chooseWallpaperAssignments(screenList, wallpaperEntries) {
     if (!Array.isArray(screenList) || screenList.length === 0)
         return [];
@@ -335,6 +359,8 @@ function chooseWallpaperAssignments(screenList, wallpaperEntries) {
     return assignments;
 }
 
+// Apply the selected wallpaper via the public desktop background settings schema. We intentionally do not
+// rely on private Shell members because they are not stable across GNOME versions.
 function applyWallpaperAssignments(assignments) {
     if (!Array.isArray(assignments) || assignments.length === 0) {
         logInfo('No wallpaper assignments to apply');
@@ -361,6 +387,8 @@ function applyWallpaperAssignments(assignments) {
     }
 }
 
+// The main refresh routine: gather the folder, classify the images, map them to logical screens, and then
+// push the current assignment through the safe settings API.
 function refreshWallpaperState() {
     try {
         const folderPath = getFolderPathForSettings();
@@ -402,6 +430,8 @@ function refreshWallpaperState() {
     }
 }
 
+// Extension lifecycle object. The timer keeps rotation scheduled in the background while the settings schema
+// provides the stable persistence layer for state and folder selection.
 class MultiWallpaperExtension {
     constructor() {
         this._settings = null;
@@ -435,6 +465,8 @@ class MultiWallpaperExtension {
         this._settings = null;
     }
 
+    // Polling is intentionally lightweight and conservative; this is a daily rotation feature rather than a
+    // high-frequency background task.
     _scheduleNextCheck() {
         if (this._timerId)
             GLib.Source.remove(this._timerId);
@@ -449,6 +481,8 @@ class MultiWallpaperExtension {
         });
     }
 
+    // Rotate once every 24 hours from the last successful change, while keeping the operation idempotent and
+    // safe when the folder is empty or invalid.
     _checkRotation() {
         if (!this._settings)
             return GLib.SOURCE_CONTINUE;
