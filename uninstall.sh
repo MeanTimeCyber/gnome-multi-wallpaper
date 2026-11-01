@@ -26,8 +26,11 @@ fi
 
 TARGET_DIR="${HOME}/.local/share/gnome-shell/extensions/${UUID}"
 
+# Disable first so GNOME unloads the extension before its files are removed.
 if command -v gnome-extensions >/dev/null 2>&1; then
-    gnome-extensions disable "${UUID}" 2>/dev/null || true
+    if ! gnome-extensions disable "${UUID}" 2>/dev/null; then
+        echo "[MultiWallpaper] Note: could not disable ${UUID}; it may not have been enabled." >&2
+    fi
 fi
 
 if [[ -d "${TARGET_DIR}" ]]; then
@@ -38,3 +41,6 @@ else
 fi
 
 echo "[MultiWallpaper] Uninstall complete."
+echo "[MultiWallpaper] Unchanged: extension settings, the current desktop background, and composites in ~/.cache/multiwallpaper."
+echo "[MultiWallpaper] Deleting the cached composite will blank the desktop background until a new wallpaper is set."
+echo "[MultiWallpaper] To clear saved settings: gsettings reset-recursively org.gnome.shell.extensions.multiwallpaper"
