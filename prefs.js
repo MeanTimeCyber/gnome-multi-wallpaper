@@ -81,11 +81,20 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
         const rescanButton = new Gtk.Button({label: 'Rescan', valign: Gtk.Align.CENTER});
         rescanRow.add_suffix(rescanButton);
         rescanRow.set_activatable_widget(rescanButton);
+        const rebuildRow = new Adw.ActionRow({
+            title: 'Rebuild index',
+            subtitle: 'Rereads every image from scratch. Use this only if the library looks wrong.',
+            useMarkup: false,
+        });
+        const rebuildButton = new Gtk.Button({label: 'Rebuild…', valign: Gtk.Align.CENTER});
+        rebuildRow.add_suffix(rebuildButton);
+        rebuildRow.set_activatable_widget(rebuildButton);
         statsGroup.add(imagesRow);
         statsGroup.add(progressRow);
         statsGroup.add(screensRow);
         statsGroup.add(lastRow);
         statsGroup.add(rescanRow);
+        statsGroup.add(rebuildRow);
         page.add(statsGroup);
 
         // Manual rotation.
@@ -129,22 +138,27 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
             imagesRow.set_subtitle(text);
         };
 
-        // Builds the index for a folder and saves it for later rotations.
-        const startIndexing = folderPath => {
+        const setIndexButtons = sensitive => {
+            rescanButton.set_sensitive(sensitive);
+            rebuildButton.set_sensitive(sensitive);
+        };
+
+        // Builds the index for a folder and saves it for later rotations. full discards the saved index first.
+        const startIndexing = (folderPath, full = false) => {
             cancelScan();
             imagesRow.set_subtitle('Indexing…');
-            rescanButton.set_sensitive(false);
+            setIndexButtons(false);
             showProgress({phase: 'listing', done: 0, total: 0});
             cancelScan = startIndex(folderPath, showProgress, outcome => {
                 cancelScan = () => {};
-                rescanButton.set_sensitive(true);
+                setIndexButtons(true);
                 progressRow.set_visible(false);
                 if (outcome.error) {
                     imagesRow.set_subtitle('Indexing failed; see the log.');
                     return;
                 }
                 showCounts(outcome.entries, outcome.stats);
-            });
+            }, {full});
         };
 
         const updateRows = () => {
@@ -162,7 +176,7 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
                 const cached = loadIndex(resolved.path);
                 if (cached) {
                     showCounts(cached, {skipped: 0, truncated: false});
-                    rescanButton.set_sensitive(true);
+                    setIndexButtons(true);
                 } else {
                     startIndexing(resolved.path);
                 }
@@ -233,6 +247,29 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
             const path = resolveFolder(settings.get_string('wallpaper-folder')).path;
             if (path)
                 startIndexing(path);
+        });
+
+        // Confirmation first: a full rebuild rereads every image and can take a long time.
+        rebuildButton.connect('clicked', () => {
+            const path = resolveFolder(settings.get_string('wallpaper-folder')).path;
+            if (!path)
+                return;
+
+            const dialog = new Adw.AlertDialog({
+                heading: 'Rebuild the library index?',
+                body: 'Every image in the folder will be read again. This can take a while, ' +
+                    'and the current wallpaper is not changed.',
+            });
+            dialog.add_response('cancel', 'Cancel');
+            dialog.add_response('rebuild', 'Rebuild');
+            dialog.set_response_appearance('rebuild', Adw.ResponseAppearance.SUGGESTED);
+            dialog.set_default_response('cancel');
+            dialog.set_close_response('cancel');
+            dialog.connect('response', (_dialog, response) => {
+                if (response === 'rebuild')
+                    startIndexing(path, true);
+            });
+            dialog.present(window);
         });
 
         changeButton.connect('clicked', () => {
