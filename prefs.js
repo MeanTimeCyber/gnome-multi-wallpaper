@@ -160,6 +160,21 @@ function collectWallpaperStats(folderPath) {
     return results;
 }
 
+function getFolderHealth(folderPath) {
+    if (!folderPath || !folderPath.trim())
+        return { valid: false, message: 'No folder selected yet; using your Pictures directory.' };
+
+    const folder = Gio.File.new_for_path(folderPath);
+    if (!folder.query_exists(null))
+        return { valid: false, message: 'Selected folder does not exist. Please choose a valid directory.' };
+
+    const stats = collectWallpaperStats(folderPath);
+    if (stats.total === 0)
+        return { valid: true, message: 'No valid PNG/JPG wallpapers were found in this folder.' };
+
+    return { valid: true, message: 'Folder is valid and contains usable wallpapers.' };
+}
+
 function buildPrefsWidget() {
     const settings = getSettings();
     const prefs = new Adw.PreferencesPage();
@@ -227,6 +242,19 @@ function buildPrefsWidget() {
     screenSummaryRow.add_suffix(screenSummaryLabel);
     group.add(screenSummaryRow);
 
+    const statusRow = new Adw.ActionRow({ title: 'Status' });
+    const statusLabel = new Gtk.Label({
+        xalign: 0,
+        justify: Gtk.Justification.LEFT,
+        selectable: true,
+        wrap: true,
+        hexpand: true,
+        margin_top: 10,
+        margin_bottom: 10,
+    });
+    statusRow.add_suffix(statusLabel);
+    group.add(statusRow);
+
     const changeNowButton = new Gtk.Button({ label: 'Change now', halign: Gtk.Align.END, valign: Gtk.Align.CENTER });
     changeNowButton.connect('clicked', () => {
         if (!settings)
@@ -234,6 +262,11 @@ function buildPrefsWidget() {
 
         const folder = getConfiguredFolder(settings);
         const stats = collectWallpaperStats(folder);
+        if (stats.total === 0) {
+            statusLabel.set_text('No valid wallpapers are available to change. Please choose a folder containing PNG or JPG files.');
+            return;
+        }
+
         const nowSeconds = Math.floor(Date.now() / 1000);
         settings.set_int64('last-change-timestamp', nowSeconds - 24 * 60 * 60 - 1);
         refreshStats();
@@ -245,6 +278,8 @@ function buildPrefsWidget() {
         if (!settings) {
             statsLabel.set_text('Settings unavailable');
             screenSummaryLabel.set_text('Monitor state unavailable');
+            statusLabel.set_text('The extension could not access GNOME settings.');
+            changeNowButton.set_sensitive(false);
             return;
         }
 
@@ -252,6 +287,8 @@ function buildPrefsWidget() {
         const stats = collectWallpaperStats(folder);
         const safeFolder = folder && folder.trim() ? folder : DEFAULT_PICTURES_DIR;
         const summary = getLogicalScreenSummary();
+        const health = getFolderHealth(safeFolder);
+        const hasWallpaper = stats.total > 0;
 
         statsLabel.set_text(
             `Folder: ${safeFolder}\n` +
@@ -265,6 +302,16 @@ function buildPrefsWidget() {
             `Landscape screens: ${summary.landscape}\n` +
             `Portrait screens: ${summary.portrait}`
         );
+
+        if (!health.valid) {
+            statusLabel.set_text(`${health.message} Using the default Pictures folder instead.`);
+        } else if (!hasWallpaper) {
+            statusLabel.set_text('No valid PNG/JPG wallpapers were found. Add image files or pick another folder.');
+        } else {
+            statusLabel.set_text(`Ready: ${health.message}`);
+        }
+
+        changeNowButton.set_sensitive(hasWallpaper);
     }
 
     if (settings)
