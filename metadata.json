@@ -1,0 +1,8 @@
+{
+  "name": "Multi Wallpaper",
+  "description": "Automatically rotates wallpapers by screen orientation, using a recursive folder scan and per-display assignment.",
+  "uuid": "multi-wallpaper@meantimecyber",
+  "shell-version": ["51", "50"],
+  "version": 1,
+  "url": "https://github.com/meantimecyber/gnome-multi-wallpaper"
+}

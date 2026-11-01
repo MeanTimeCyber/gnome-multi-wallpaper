@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<schemalist>
+  <schema id="org.gnome.shell.extensions.multiwallpaper" path="/org/gnome/shell/extensions/multiwallpaper/">
+    <key type="s" name="wallpaper-folder">
+      <default>""</default>
+      <summary>Wallpaper folder</summary>
+      <description>The folder containing wallpapers to rotate.</description>
+    </key>
+    <key type="x" name="last-change-timestamp">
+      <default>0</default>
+      <summary>Last wallpaper change timestamp</summary>
+      <description>Unix timestamp of the most recent wallpaper rotation.</description>
+    </key>
+  </schema>
+</schemalist>
