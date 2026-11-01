@@ -34,6 +34,7 @@ find "${SCRIPT_DIR}" -mindepth 1 -maxdepth 1 \
     ! -name 'install.sh' \
     ! -name 'uninstall.sh' \
     ! -name 'tests' \
+    ! -name '.git' \
     -exec cp -a {} "${TARGET_DIR}/" \;
 
 if command -v glib-compile-schemas >/dev/null 2>&1; then

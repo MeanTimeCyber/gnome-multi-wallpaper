@@ -1,367 +1,158 @@
-const { Adw, Gio, GLib, Gtk } = imports.gi;
-const ExtensionUtils = imports.misc.extensionUtils;
-const Main = imports.ui.main;
-const Me = ExtensionUtils.getCurrentExtension();
+// Preferences window for Multi Wallpaper. Runs in the GNOME Settings process, not in the Shell.
 
-// Preferences are intentionally simple: the user picks a safe folder, sees the relevant stats, and can trigger
-// an immediate rotation without needing to understand the internal selection logic.
-const SETTINGS_SCHEMA = 'org.gnome.shell.extensions.multiwallpaper';
-const DEFAULT_PICTURES_DIR = GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) || `${GLib.get_home_dir()}/Pictures`;
+import Adw from 'gi://Adw?version=1';
+import Gdk from 'gi://Gdk?version=4.0';
+import Gio from 'gi://Gio';
+import GLib from 'gi://GLib';
+import Gtk from 'gi://Gtk?version=4.0';
+import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/extensions/prefs.js';
 
-function logInfo(message, detail = null) {
-    const suffix = detail ? `: ${detail}` : '';
-    log(`[MultiWallpaper] ${message}${suffix}`);
-}
+import {
+    resolveFolder,
+    validateFolder,
+    scanFolder,
+    summarizeEntries,
+    getLogicalScreens,
+    summarizeScreens,
+    runRotation,
+} from './lib/wallpaperLogic.js';
 
-// Access the settings schema using the supported GNOME extension API.
-function getSettings() {
-    try {
-        return ExtensionUtils.getSettings(SETTINGS_SCHEMA);
-    } catch (error) {
-        logInfo('Failed to read preferences settings', error && error.message ? error.message : String(error));
-        return null;
+// Read connected monitors from GDK; the Shell's layout manager is not available in this process.
+function readMonitors() {
+    const display = Gdk.Display.get_default();
+    if (!display)
+        return [];
+
+    const list = display.get_monitors();
+    const monitors = [];
+    for (let i = 0; i < list.get_n_items(); i++) {
+        const geometry = list.get_item(i).get_geometry();
+        monitors.push({x: geometry.x, y: geometry.y, width: geometry.width, height: geometry.height});
     }
+    return monitors;
 }
 
-// Preferences should only work with folders under the current user’s home, which keeps the extension local and
-// reduces the chance of a surprising or unsafe scan path.
-function isPathInsideUserHome(path) {
-    if (!path || typeof path !== 'string')
-        return false;
-
-    const homeDir = GLib.get_home_dir();
-    if (!homeDir)
-        return false;
-
-    const trimmed = path.trim();
-    return trimmed === homeDir || trimmed.startsWith(`${homeDir}/`);
+function formatTimestamp(seconds) {
+    if (!seconds)
+        return 'Never';
+    const dateTime = GLib.DateTime.new_from_unix_local(seconds);
+    return dateTime ? dateTime.format('%Y-%m-%d %H:%M') : 'Unknown';
 }
 
-// Return the user-selected folder, or the default Pictures directory when there is no valid setting yet.
-function getConfiguredFolder(settings) {
-    if (!settings)
-        return DEFAULT_PICTURES_DIR;
+export default class MultiWallpaperPreferences extends ExtensionPreferences {
+    fillPreferencesWindow(window) {
+        const settings = this.getSettings();
+        const page = new Adw.PreferencesPage();
 
-    try {
-        const folder = settings.get_string('wallpaper-folder');
-        if (folder && folder.trim())
-            return folder;
-    } catch (error) {
-        logInfo('Unable to read wallpaper-folder setting', error && error.message ? error.message : String(error));
-    }
+        // Folder selection. The chosen path is validated before it is saved.
+        const folderGroup = new Adw.PreferencesGroup({
+            title: 'Wallpaper folder',
+            description: 'Images are searched recursively. Only PNG and JPG files are used.',
+        });
+        const folderRow = new Adw.ActionRow({title: 'Folder', useMarkup: false});
+        const chooseButton = new Gtk.Button({label: 'Choose…', valign: Gtk.Align.CENTER});
+        folderRow.add_suffix(chooseButton);
+        folderRow.set_activatable_widget(chooseButton);
 
-    return DEFAULT_PICTURES_DIR;
-}
+        const noticeRow = new Adw.ActionRow({title: '', useMarkup: false, visible: false});
+        folderGroup.add(folderRow);
+        folderGroup.add(noticeRow);
+        page.add(folderGroup);
 
-// Summarize the effective monitor layout so users can understand how many logical screens the extension will
-// target, even when mirrored outputs are collapsed into a single display group.
-function getLogicalScreenSummary() {
-    const layoutManager = Main && Main.layoutManager ? Main.layoutManager : null;
-    const monitors = layoutManager && layoutManager.monitors ? layoutManager.monitors : [];
+        // Library and display statistics, refreshed whenever the folder changes.
+        const statsGroup = new Adw.PreferencesGroup({title: 'Library'});
+        const imagesRow = new Adw.ActionRow({title: 'Images', useMarkup: false});
+        const screensRow = new Adw.ActionRow({title: 'Displays', useMarkup: false});
+        const lastRow = new Adw.ActionRow({title: 'Last change', useMarkup: false});
+        statsGroup.add(imagesRow);
+        statsGroup.add(screensRow);
+        statsGroup.add(lastRow);
+        page.add(statsGroup);
 
-    if (!Array.isArray(monitors) || monitors.length === 0)
-        return { total: 1, landscape: 1, portrait: 0 };
+        // Manual rotation.
+        const actionGroup = new Adw.PreferencesGroup({title: 'Actions'});
+        const changeRow = new Adw.ActionRow({
+            title: 'Change wallpaper now',
+            subtitle: 'Picks new images immediately. The 24-hour timer restarts after a successful change.',
+            useMarkup: false,
+        });
+        const changeButton = new Gtk.Button({label: 'Change now', valign: Gtk.Align.CENTER});
+        changeRow.add_suffix(changeButton);
+        changeRow.set_activatable_widget(changeButton);
+        actionGroup.add(changeRow);
+        page.add(actionGroup);
 
-    const groups = [];
-    for (let i = 0; i < monitors.length; i++) {
-        const monitor = monitors[i];
-        if (!monitor)
-            continue;
+        window.add(page);
 
-        const width = Number(monitor.width) || 0;
-        const height = Number(monitor.height) || 0;
-        if (width <= 0 || height <= 0)
-            continue;
+        const refresh = () => {
+            const resolved = resolveFolder(settings.get_string('wallpaper-folder'));
+            folderRow.set_subtitle(resolved.path ?? 'No usable folder');
 
-        const duplicate = groups.some(group =>
-            Math.abs(group.width - width) < 2 &&
-            Math.abs(group.height - height) < 2 &&
-            Math.abs(group.x - Number(monitor.x || 0)) < 2 &&
-            Math.abs(group.y - Number(monitor.y || 0)) < 2
-        );
+            noticeRow.set_visible(Boolean(resolved.notice));
+            if (resolved.notice)
+                noticeRow.set_title(resolved.notice);
 
-        if (!duplicate)
-            groups.push({ width, height, x: Number(monitor.x || 0), y: Number(monitor.y || 0) });
-    }
+            if (resolved.path) {
+                const {entries, stats} = scanFolder(resolved.path);
+                const counts = summarizeEntries(entries);
+                let text = `${counts.total} total: ${counts.landscape} landscape, ${counts.portrait} portrait`;
+                if (stats.skipped > 0)
+                    text += `, ${stats.skipped} skipped`;
+                if (stats.truncated)
+                    text += ' (scan limit reached)';
+                imagesRow.set_subtitle(text);
+            } else {
+                imagesRow.set_subtitle('No folder');
+            }
 
-    if (groups.length === 0)
-        return { total: 1, landscape: 1, portrait: 0 };
-
-    const landscape = groups.filter(group => group.height <= group.width).length;
-    const portrait = groups.length - landscape;
-    return { total: groups.length, landscape, portrait };
-}
-
-// Limit the scan to the image formats the feature deliberately supports.
-function isSupportedImageName(name) {
-    if (!name || typeof name !== 'string')
-        return false;
-
-    const lower = name.toLowerCase();
-    return lower.endsWith('.png') || lower.endsWith('.jpg') || lower.endsWith('.jpeg');
-}
-
-// Inspect each file once to derive the width, height, and orientation used for matching logic.
-function readImageStats(path) {
-    try {
-        const pixbuf = imports.gi.GdkPixbuf.Pixbuf.new_from_file(path);
-        const width = pixbuf.get_width();
-        const height = pixbuf.get_height();
-
-        if (width <= 0 || height <= 0)
-            return null;
-
-        return {
-            width,
-            height,
-            orientation: height > width ? 'portrait' : 'landscape',
+            const screens = summarizeScreens(getLogicalScreens(readMonitors()));
+            screensRow.set_subtitle(
+                `${screens.total} display(s): ${screens.landscape} landscape, ${screens.portrait} portrait`);
+            lastRow.set_subtitle(formatTimestamp(settings.get_int64('last-change-timestamp')));
         };
-    } catch (error) {
-        logInfo('Unable to read image stats', `${path} (${error && error.message ? error.message : String(error)})`);
-        return null;
-    }
-}
 
-// Gather counts without making any filesystem changes. This allows the UI to show the current state clearly
-// before a wallpaper rotation is triggered.
-function collectWallpaperStats(folderPath) {
-    const results = {
-        total: 0,
-        landscape: 0,
-        portrait: 0,
-    };
+        chooseButton.connect('clicked', () => {
+            const dialog = new Gtk.FileDialog({title: 'Choose wallpaper folder', modal: true});
+            const current = resolveFolder(settings.get_string('wallpaper-folder')).path;
+            if (current)
+                dialog.set_initial_folder(Gio.File.new_for_path(current));
 
-    const folder = folderPath ? Gio.File.new_for_path(folderPath) : null;
-    if (!folder || !folder.query_exists(null)) {
-        return results;
-    }
-
-    const stack = [folder];
-    while (stack.length > 0) {
-        const current = stack.pop();
-        if (!current)
-            continue;
-
-        let enumerator = null;
-        try {
-            enumerator = current.enumerate_children('standard::name,standard::type', Gio.FileQueryInfoFlags.NONE, null);
-        } catch (error) {
-            continue;
-        }
-
-        let info = null;
-        while ((info = enumerator.next_file(null)) !== null) {
-            const type = info.get_file_type();
-            const name = info.get_name();
-
-            if (type === Gio.FileType.DIRECTORY) {
-                const child = current.get_child(name);
-                if (child)
-                    stack.push(child);
-                continue;
-            }
-
-            if (type !== Gio.FileType.REGULAR || !isSupportedImageName(name))
-                continue;
-
-            const file = current.get_child(name);
-            const fullPath = file ? file.get_path() : null;
-            if (!fullPath)
-                continue;
-
-            const imageStats = readImageStats(fullPath);
-            if (!imageStats)
-                continue;
-
-            results.total += 1;
-            if (imageStats.orientation === 'landscape')
-                results.landscape += 1;
-            else
-                results.portrait += 1;
-        }
-    }
-
-    return results;
-}
-
-// Provide a user-friendly health signal so the UI can explain whether the folder is usable, empty, or invalid.
-function getFolderHealth(folderPath) {
-    if (!folderPath || !folderPath.trim())
-        return { valid: false, message: 'No folder selected yet; using your Pictures directory.' };
-
-    const folder = Gio.File.new_for_path(folderPath);
-    if (!folder.query_exists(null))
-        return { valid: false, message: 'Selected folder does not exist. Please choose a valid directory.' };
-
-    const stats = collectWallpaperStats(folderPath);
-    if (stats.total === 0)
-        return { valid: true, message: 'No valid PNG/JPG wallpapers were found in this folder.' };
-
-    return { valid: true, message: 'Folder is valid and contains usable wallpapers.' };
-}
-
-// Construct the GNOME Adwaita preference page. This page is intentionally small, clear, and action-oriented.
-function buildPrefsWidget() {
-    const settings = getSettings();
-    const prefs = new Adw.PreferencesPage();
-    const group = new Adw.PreferencesGroup({ title: 'Wallpaper settings' });
-    prefs.add(group);
-
-    const folderRow = new Adw.ActionRow({ title: 'Wallpaper folder' });
-    const folderButton = new Gtk.Button({ label: 'Choose folder', halign: Gtk.Align.END, valign: Gtk.Align.CENTER });
-
-    folderButton.connect('clicked', () => {
-        const dialog = new Gtk.FileChooserNative({
-            title: 'Select wallpaper folder',
-            action: Gtk.FileChooserAction.SELECT_FOLDER,
-            modal: true,
-        });
-
-        const baseFolder = getConfiguredFolder(settings) || DEFAULT_PICTURES_DIR;
-        const currentFolder = Gio.File.new_for_path(baseFolder);
-        if (currentFolder.query_exists(null))
-            dialog.set_current_folder(currentFolder);
-
-        dialog.connect('response', (widget, response) => {
-            if (response === Gtk.ResponseType.ACCEPT) {
-                const folder = widget.get_file();
-                if (folder) {
-                    const chosenPath = folder.get_path();
-                    if (chosenPath && chosenPath.trim()) {
-                        settings.set_string('wallpaper-folder', chosenPath);
-                    }
+            dialog.select_folder(window, null, (source, asyncResult) => {
+                let file = null;
+                try {
+                    file = source.select_folder_finish(asyncResult);
+                } catch (error) {
+                    // The user cancelled the dialog or it failed; nothing to change.
+                    return;
                 }
-            }
-            widget.destroy();
-            refreshStats();
+                if (!file)
+                    return;
+
+                const check = validateFolder(file.get_path());
+                if (!check.ok) {
+                    window.add_toast(new Adw.Toast({title: check.reason}));
+                    return;
+                }
+
+                settings.set_string('wallpaper-folder', check.path);
+                refresh();
+            });
         });
 
-        dialog.show();
-    });
+        changeButton.connect('clicked', () => {
+            const outcome = runRotation(settings, readMonitors());
+            const title = outcome.status === 'applied' ? 'Wallpaper changed.' : outcome.message;
+            window.add_toast(new Adw.Toast({title}));
+            refresh();
+        });
 
-    folderRow.add_suffix(folderButton);
-    group.add(folderRow);
+        // Disconnect the settings handler when the window closes to avoid leaking callbacks.
+        const changedId = settings.connect('changed::wallpaper-folder', () => refresh());
+        window.connect('close-request', () => {
+            settings.disconnect(changedId);
+            return false;
+        });
 
-    const statsRow = new Adw.ActionRow({ title: 'Wallpaper stats' });
-    const statsLabel = new Gtk.Label({
-        xalign: 0,
-        justify: Gtk.Justification.LEFT,
-        selectable: true,
-        wrap: true,
-        hexpand: true,
-        margin_top: 10,
-        margin_bottom: 10,
-    });
-    statsRow.add_suffix(statsLabel);
-    group.add(statsRow);
-
-    const screenSummaryRow = new Adw.ActionRow({ title: 'Screen layout' });
-    const screenSummaryLabel = new Gtk.Label({
-        xalign: 0,
-        justify: Gtk.Justification.LEFT,
-        selectable: true,
-        wrap: true,
-        hexpand: true,
-        margin_top: 10,
-        margin_bottom: 10,
-    });
-    screenSummaryRow.add_suffix(screenSummaryLabel);
-    group.add(screenSummaryRow);
-
-    const statusRow = new Adw.ActionRow({ title: 'Status' });
-    const statusLabel = new Gtk.Label({
-        xalign: 0,
-        justify: Gtk.Justification.LEFT,
-        selectable: true,
-        wrap: true,
-        hexpand: true,
-        margin_top: 10,
-        margin_bottom: 10,
-    });
-    statusRow.add_suffix(statusLabel);
-    group.add(statusRow);
-
-    // Manual rotation is useful for testing and immediate updates, but the button is safely disabled when no
-    // valid wallpaper set exists.
-    const changeNowButton = new Gtk.Button({ label: 'Change now', halign: Gtk.Align.END, valign: Gtk.Align.CENTER });
-    changeNowButton.connect('clicked', () => {
-        if (!settings)
-            return;
-
-        const folder = getConfiguredFolder(settings);
-        const stats = collectWallpaperStats(folder);
-        if (stats.total === 0) {
-            statusLabel.set_text('No valid wallpapers are available to change. Please choose a folder containing PNG or JPG files.');
-            return;
-        }
-
-        const nowSeconds = Math.floor(Date.now() / 1000);
-        settings.set_int64('last-change-timestamp', nowSeconds - 24 * 60 * 60 - 1);
-        refreshStats();
-        logInfo('Manual refresh requested', `${stats.total} valid image(s) found`);
-    });
-    statsRow.add_suffix(changeNowButton);
-
-    function refreshStats() {
-        if (!settings) {
-            statsLabel.set_text('Settings unavailable');
-            screenSummaryLabel.set_text('Monitor state unavailable');
-            statusLabel.set_text('The extension could not access GNOME settings.');
-            changeNowButton.set_sensitive(false);
-            return;
-        }
-
-        const folder = getConfiguredFolder(settings);
-        const safeFolder = folder && folder.trim() ? folder : DEFAULT_PICTURES_DIR;
-
-        if (!isPathInsideUserHome(safeFolder)) {
-            statusLabel.set_text('Selected folder is outside your home directory. Only home-directory wallpaper scans are allowed for safety.');
-            changeNowButton.set_sensitive(false);
-            statsLabel.set_text(`Folder: ${safeFolder}\nFound: 0 images\nLandscape: 0\nPortrait: 0`);
-            screenSummaryLabel.set_text('Monitor state unavailable');
-            return;
-        }
-
-        const stats = collectWallpaperStats(safeFolder);
-        const summary = getLogicalScreenSummary();
-        const health = getFolderHealth(safeFolder);
-        const hasWallpaper = stats.total > 0;
-
-        statsLabel.set_text(
-            `Folder: ${safeFolder}\n` +
-            `Found: ${stats.total} images\n` +
-            `Landscape: ${stats.landscape}\n` +
-            `Portrait: ${stats.portrait}`
-        );
-
-        screenSummaryLabel.set_text(
-            `Logical screens: ${summary.total}\n` +
-            `Landscape screens: ${summary.landscape}\n` +
-            `Portrait screens: ${summary.portrait}`
-        );
-
-        if (!health.valid) {
-            statusLabel.set_text(`${health.message} Using the default Pictures folder instead.`);
-        } else if (!hasWallpaper) {
-            statusLabel.set_text('No valid PNG/JPG wallpapers were found. Add image files or pick another folder.');
-        } else {
-            statusLabel.set_text(`Ready: ${health.message}`);
-        }
-
-        changeNowButton.set_sensitive(hasWallpaper);
+        refresh();
     }
-
-    if (settings)
-        settings.connect('changed::wallpaper-folder', refreshStats);
-
-    refreshStats();
-    return prefs;
-}
-
-function init() {
-    ExtensionUtils.initTranslations(Me.uuid);
-}
-
-function fillPreferencesWindow(window) {
-    window.add(buildPrefsWidget());
 }
