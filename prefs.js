@@ -20,6 +20,18 @@ function getSettings() {
     }
 }
 
+function isPathInsideUserHome(path) {
+    if (!path || typeof path !== 'string')
+        return false;
+
+    const homeDir = GLib.get_home_dir();
+    if (!homeDir)
+        return false;
+
+    const trimmed = path.trim();
+    return trimmed === homeDir || trimmed.startsWith(`${homeDir}/`);
+}
+
 function getConfiguredFolder(settings) {
     if (!settings)
         return DEFAULT_PICTURES_DIR;
@@ -284,8 +296,17 @@ function buildPrefsWidget() {
         }
 
         const folder = getConfiguredFolder(settings);
-        const stats = collectWallpaperStats(folder);
         const safeFolder = folder && folder.trim() ? folder : DEFAULT_PICTURES_DIR;
+
+        if (!isPathInsideUserHome(safeFolder)) {
+            statusLabel.set_text('Selected folder is outside your home directory. Only home-directory wallpaper scans are allowed for safety.');
+            changeNowButton.set_sensitive(false);
+            statsLabel.set_text(`Folder: ${safeFolder}\nFound: 0 images\nLandscape: 0\nPortrait: 0`);
+            screenSummaryLabel.set_text('Monitor state unavailable');
+            return;
+        }
+
+        const stats = collectWallpaperStats(safeFolder);
         const summary = getLogicalScreenSummary();
         const health = getFolderHealth(safeFolder);
         const hasWallpaper = stats.total > 0;

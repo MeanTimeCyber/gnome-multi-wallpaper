@@ -41,6 +41,21 @@ function getDefaultWallpaperFolder() {
     return DEFAULT_PICTURES_DIR;
 }
 
+function isPathInsideUserHome(path) {
+    if (!path || typeof path !== 'string')
+        return false;
+
+    const homeDir = GLib.get_home_dir();
+    if (!homeDir)
+        return false;
+
+    const trimmed = path.trim();
+    if (!trimmed)
+        return false;
+
+    return trimmed === homeDir || trimmed.startsWith(`${homeDir}/`);
+}
+
 function normalizeConfiguredFolder(folderPath) {
     if (!folderPath || typeof folderPath !== 'string')
         return getDefaultWallpaperFolder();
@@ -51,8 +66,17 @@ function normalizeConfiguredFolder(folderPath) {
 
     try {
         const file = Gio.File.new_for_path(candidate);
-        if (file.query_exists(null))
-            return candidate;
+        if (!file.query_exists(null)) {
+            logInfo('Configured wallpaper folder is missing; falling back to Pictures', candidate);
+            return getDefaultWallpaperFolder();
+        }
+
+        if (!isPathInsideUserHome(candidate)) {
+            logInfo('Refusing wallpaper scan outside the user home directory', candidate);
+            return getDefaultWallpaperFolder();
+        }
+
+        return candidate;
     } catch (error) {
         logInfo('Invalid wallpaper folder path', candidate);
     }
@@ -108,6 +132,21 @@ function readWallpaperEntry(file) {
         return null;
 
     try {
+        const info = file.query_info('standard::type,standard::is-symlink', Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+        if (info.get_is_symlink()) {
+            logInfo('Skipping symlinked wallpaper', path);
+            return null;
+        }
+
+        if (info.get_file_type() !== Gio.FileType.REGULAR) {
+            return null;
+        }
+    } catch (error) {
+        logInfo('Could not inspect wallpaper entry type', `${path} (${error && error.message ? error.message : String(error)})`);
+        return null;
+    }
+
+    try {
         const pixbuf = GdkPixbuf.Pixbuf.new_from_file(path);
         const width = pixbuf.get_width();
         const height = pixbuf.get_height();
@@ -134,6 +173,11 @@ function readWallpaperEntry(file) {
 function collectWallpaperEntries(folderPath) {
     const wallpaperEntries = [];
     const finalFolderPath = normalizeConfiguredFolder(folderPath);
+    if (!isPathInsideUserHome(finalFolderPath)) {
+        logInfo('Wallpaper scan rejected: path is outside the user home directory', finalFolderPath);
+        return wallpaperEntries;
+    }
+
     const folder = Gio.File.new_for_path(finalFolderPath);
 
     if (!folder || !folder.query_exists(null)) {
