@@ -10,11 +10,11 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 import {
     resolveFolder,
     validateFolder,
-    scanFolder,
+    startScan,
     summarizeEntries,
     getLogicalScreens,
     summarizeScreens,
-    runRotation,
+    startRotation,
     logError,
 } from './lib/wallpaperLogic.js';
 
@@ -88,6 +88,10 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
 
         window.add(page);
 
+        // Cancel handles for work in flight; both are called when the window closes.
+        let cancelScan = () => {};
+        let cancelRotation = () => {};
+
         const updateRows = () => {
             const resolved = resolveFolder(settings.get_string('wallpaper-folder'));
             folderRow.set_subtitle(resolved.path ?? 'No usable folder');
@@ -96,15 +100,24 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
             if (resolved.notice)
                 noticeRow.set_title(resolved.notice);
 
+            cancelScan();
             if (resolved.path) {
-                const {entries, stats} = scanFolder(resolved.path);
-                const counts = summarizeEntries(entries);
-                let text = `${counts.total} total: ${counts.landscape} landscape, ${counts.portrait} portrait`;
-                if (stats.skipped > 0)
-                    text += `, ${stats.skipped} skipped`;
-                if (stats.truncated)
-                    text += ' (scan limit reached)';
-                imagesRow.set_subtitle(text);
+                imagesRow.set_subtitle('Scanning…');
+                cancelScan = startScan(resolved.path, ({entries, stats, error}) => {
+                    cancelScan = () => {};
+                    if (error) {
+                        imagesRow.set_subtitle('Scan failed');
+                        return;
+                    }
+
+                    const counts = summarizeEntries(entries);
+                    let text = `${counts.total} total: ${counts.landscape} landscape, ${counts.portrait} portrait`;
+                    if (stats.skipped > 0)
+                        text += `, ${stats.skipped} skipped`;
+                    if (stats.truncated)
+                        text += ' (scan limit reached)';
+                    imagesRow.set_subtitle(text);
+                });
             } else {
                 imagesRow.set_subtitle('No folder');
             }
@@ -169,16 +182,23 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
         });
 
         changeButton.connect('clicked', () => {
-            const outcome = runRotation(settings, readMonitors());
-            const title = outcome.status === 'applied' ? 'Wallpaper changed.' : outcome.message;
-            window.add_toast(new Adw.Toast({title}));
-            refresh();
+            // Disabled while running so a second click cannot start an overlapping rotation.
+            changeButton.set_sensitive(false);
+            cancelRotation = startRotation(settings, readMonitors, outcome => {
+                cancelRotation = () => {};
+                changeButton.set_sensitive(true);
+                const title = outcome.status === 'applied' ? 'Wallpaper changed.' : outcome.message;
+                window.add_toast(new Adw.Toast({title}));
+                refresh();
+            });
         });
 
-        // Disconnect the settings handler when the window closes to avoid leaking callbacks.
+        // Disconnect the settings handler and stop background work when the window closes.
         const changedId = settings.connect('changed::wallpaper-folder', () => refresh());
         window.connect('close-request', () => {
             settings.disconnect(changedId);
+            cancelScan();
+            cancelRotation();
             return false;
         });
 

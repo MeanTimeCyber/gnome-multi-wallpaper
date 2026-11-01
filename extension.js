@@ -3,7 +3,7 @@
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {ROTATION_SECONDS, isCompositeMissing, log, logError, runRotation} from './lib/wallpaperLogic.js';
+import {ROTATION_SECONDS, isCompositeMissing, log, logError, startRotation} from './lib/wallpaperLogic.js';
 
 const CHECK_INTERVAL_SECONDS = 60;
 const RETRY_SECONDS = 60 * 60;
@@ -38,6 +38,7 @@ export default class MultiWallpaperExtension extends Extension {
     }
 
     disable() {
+        this._stopRotation();
         if (this._timerId) {
             GLib.Source.remove(this._timerId);
             this._timerId = 0;
@@ -71,7 +72,7 @@ export default class MultiWallpaperExtension extends Extension {
     }
 
     _checkDue() {
-        if (!this._settings)
+        if (!this._settings || this._rotating)
             return;
 
         const now = Math.floor(Date.now() / 1000);
@@ -91,17 +92,25 @@ export default class MultiWallpaperExtension extends Extension {
             this._rotate();
     }
 
+    _stopRotation() {
+        if (this._cancelRotation)
+            this._cancelRotation();
+        this._cancelRotation = null;
+        this._rotating = false;
+    }
+
+    // Starts a rotation, replacing one still in flight (e.g. the folder changed mid-scan).
     _rotate() {
         if (!this._settings)
             return;
 
-        try {
-            const outcome = runRotation(this._settings, Main.layoutManager.monitors ?? []);
+        this._stopRotation();
+        this._rotating = true;
+        this._cancelRotation = startRotation(this._settings, () => Main.layoutManager.monitors ?? [], outcome => {
+            this._rotating = false;
+            this._cancelRotation = null;
             // Success clears any earlier retry gate; any other outcome waits an hour before retrying.
             this._retryAfter = outcome.status === 'applied' ? 0 : Math.floor(Date.now() / 1000) + RETRY_SECONDS;
-        } catch (error) {
-            this._retryAfter = Math.floor(Date.now() / 1000) + RETRY_SECONDS;
-            logError('Rotation failed', error && error.message ? error.message : String(error));
-        }
+        });
     }
 }
