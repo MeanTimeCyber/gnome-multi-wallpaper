@@ -3,7 +3,7 @@
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {ROTATION_SECONDS, isCompositeMissing, log, logError, startRotation} from './lib/wallpaperLogic.js';
+import {EXTENSION_SCHEMA, ROTATION_SECONDS, isCompositeMissing, log, logError, startRotation} from './lib/wallpaperLogic.js';
 
 const CHECK_INTERVAL_SECONDS = 60;
 const RETRY_SECONDS = 60 * 60;
@@ -12,7 +12,7 @@ const MONITOR_SETTLE_MS = 2000;
 export default class MultiWallpaperExtension extends Extension {
     enable() {
         try {
-            this._settings = this.getSettings();
+            this._settings = this.getSettings(EXTENSION_SCHEMA);
         } catch (error) {
             logError('Settings schema unavailable; extension inactive', error.message);
             return;

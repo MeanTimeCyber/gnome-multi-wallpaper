@@ -10,12 +10,14 @@ import {ExtensionPreferences} from 'resource:///org/gnome/Shell/Extensions/js/ex
 import {
     resolveFolder,
     validateFolder,
-    startScan,
+    startIndex,
+    loadIndex,
     summarizeEntries,
     getLogicalScreens,
     summarizeScreens,
     startRotation,
     logError,
+    EXTENSION_SCHEMA,
 } from './lib/wallpaperLogic.js';
 
 // Read connected monitors from GDK; the Shell's layout manager is not available in this process.
@@ -45,7 +47,7 @@ function formatTimestamp(seconds) {
 
 export default class MultiWallpaperPreferences extends ExtensionPreferences {
     fillPreferencesWindow(window) {
-        const settings = this.getSettings();
+        const settings = this.getSettings(EXTENSION_SCHEMA);
         const page = new Adw.PreferencesPage();
 
         // Folder selection. The chosen path is validated before it is saved.
@@ -63,14 +65,27 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
         folderGroup.add(noticeRow);
         page.add(folderGroup);
 
-        // Library and display statistics, refreshed whenever the folder changes.
+        // Library statistics come from the saved index, so reopening the window does not rescan.
         const statsGroup = new Adw.PreferencesGroup({title: 'Library'});
         const imagesRow = new Adw.ActionRow({title: 'Images', useMarkup: false});
+        const progressRow = new Adw.ActionRow({title: 'Indexing', useMarkup: false, visible: false});
+        const progressBar = new Gtk.ProgressBar({valign: Gtk.Align.CENTER, width_request: 240, show_text: true});
+        progressRow.add_suffix(progressBar);
         const screensRow = new Adw.ActionRow({title: 'Displays', useMarkup: false});
         const lastRow = new Adw.ActionRow({title: 'Last change', useMarkup: false});
+        const rescanRow = new Adw.ActionRow({
+            title: 'Rescan folder',
+            subtitle: 'Finds new and changed images. Unchanged files are not reread.',
+            useMarkup: false,
+        });
+        const rescanButton = new Gtk.Button({label: 'Rescan', valign: Gtk.Align.CENTER});
+        rescanRow.add_suffix(rescanButton);
+        rescanRow.set_activatable_widget(rescanButton);
         statsGroup.add(imagesRow);
+        statsGroup.add(progressRow);
         statsGroup.add(screensRow);
         statsGroup.add(lastRow);
+        statsGroup.add(rescanRow);
         page.add(statsGroup);
 
         // Manual rotation.
@@ -92,6 +107,46 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
         let cancelScan = () => {};
         let cancelRotation = () => {};
 
+        // Shows the indexing bar; listing has no total, so it pulses until the reading pass starts.
+        const showProgress = ({phase, done, total}) => {
+            progressRow.set_visible(true);
+            if (phase === 'listing') {
+                progressBar.pulse();
+                progressBar.set_text(`Listing files… ${done} found`);
+            } else {
+                progressBar.set_fraction(total > 0 ? done / total : 0);
+                progressBar.set_text(`${done} of ${total}`);
+            }
+        };
+
+        const showCounts = (entries, stats) => {
+            const counts = summarizeEntries(entries);
+            let text = `${counts.total} total: ${counts.landscape} landscape, ${counts.portrait} portrait`;
+            if (stats.skipped > 0)
+                text += `, ${stats.skipped} skipped`;
+            if (stats.truncated)
+                text += ' (limit reached)';
+            imagesRow.set_subtitle(text);
+        };
+
+        // Builds the index for a folder and saves it for later rotations.
+        const startIndexing = folderPath => {
+            cancelScan();
+            imagesRow.set_subtitle('Indexing…');
+            rescanButton.set_sensitive(false);
+            showProgress({phase: 'listing', done: 0, total: 0});
+            cancelScan = startIndex(folderPath, showProgress, outcome => {
+                cancelScan = () => {};
+                rescanButton.set_sensitive(true);
+                progressRow.set_visible(false);
+                if (outcome.error) {
+                    imagesRow.set_subtitle('Indexing failed; see the log.');
+                    return;
+                }
+                showCounts(outcome.entries, outcome.stats);
+            });
+        };
+
         const updateRows = () => {
             const resolved = resolveFolder(settings.get_string('wallpaper-folder'));
             folderRow.set_subtitle(resolved.path ?? 'No usable folder');
@@ -101,23 +156,16 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
                 noticeRow.set_title(resolved.notice);
 
             cancelScan();
+            progressRow.set_visible(false);
             if (resolved.path) {
-                imagesRow.set_subtitle('Scanning…');
-                cancelScan = startScan(resolved.path, ({entries, stats, error}) => {
-                    cancelScan = () => {};
-                    if (error) {
-                        imagesRow.set_subtitle('Scan failed');
-                        return;
-                    }
-
-                    const counts = summarizeEntries(entries);
-                    let text = `${counts.total} total: ${counts.landscape} landscape, ${counts.portrait} portrait`;
-                    if (stats.skipped > 0)
-                        text += `, ${stats.skipped} skipped`;
-                    if (stats.truncated)
-                        text += ' (scan limit reached)';
-                    imagesRow.set_subtitle(text);
-                });
+                // A saved index is shown at once; a folder without one is indexed now.
+                const cached = loadIndex(resolved.path);
+                if (cached) {
+                    showCounts(cached, {skipped: 0, truncated: false});
+                    rescanButton.set_sensitive(true);
+                } else {
+                    startIndexing(resolved.path);
+                }
             } else {
                 imagesRow.set_subtitle('No folder');
             }
@@ -179,6 +227,12 @@ export default class MultiWallpaperPreferences extends ExtensionPreferences {
                 }
                 refresh();
             });
+        });
+
+        rescanButton.connect('clicked', () => {
+            const path = resolveFolder(settings.get_string('wallpaper-folder')).path;
+            if (path)
+                startIndexing(path);
         });
 
         changeButton.connect('clicked', () => {
