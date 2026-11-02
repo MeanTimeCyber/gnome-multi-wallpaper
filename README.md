@@ -4,6 +4,9 @@ A GNOME Shell extension for GNOME 50 and 51 that scans a selected folder recursi
 
 > **Warning: vibecoded and lightly tested.** This extension was largely generated with AI assistance. It has only been tested on a single system (one GNOME setup and one hardware configuration). Expect bugs, review the code before use, and do not rely on it for anything critical. Use at your own risk.
 
+## Why
+Whilst there are some good wallpaper managers for GNOME, none I could find deal with a monitor in portrait mode. So I had LLMs build me one. For details on how, see [the process notes](./process.md).
+
 ## Features
 
 - Folder picker in the preferences dialog, limited to folders inside your home directory
