@@ -7,7 +7,7 @@
    - Spanning: each rotation renders one composite JPEG (quality 95) that covers all logical monitors. It is applied with the public `spanned` picture option.
    - Per-monitor pick: each monitor draws from images matching its orientation. The choice is random among the top 10 candidates via `GLib.random_int_range`. The first version was deterministic and was changed.
    - Settings: schema `org.gnome.shell.extensions.multiwallpaper` holds `wallpaper-folder` and `last-change-timestamp`. Preferences use GTK4 and libadwaita.
-   - Timing: a 60 s timer checks the schedule. Rotation happens every 24 h (`ROTATION_SECONDS`). Monitor changes are debounced for 2000 ms. A folder change triggers a rotation. A failed rotation waits one hour before retrying.
+   - Timing: a 60 s timer checks the schedule. Rotation happens every 24 h (`ROTATION_SECONDS`). Monitor changes and lock-screen unlocks are debounced for 2000 ms and rebuild the composite, so a display reset during unlock does not leave a misaligned wallpaper. A folder change triggers a rotation. A failed rotation waits one hour before retrying.
    - `metadata.json` version check added.
    - `install.sh` and `uninstall.sh` rewritten. Install stages files first, checks each step, and only then replaces the installed copy. Install path: `~/.local/share/gnome-shell/extensions/multi-wallpaper@meantimecyber`.
    - Schema error: `Expected type string for argument 'schema_id'` came from calling `getSettings()` without a schema ID. `EXTENSION_SCHEMA` is now passed explicitly. The user confirmed a basic live run worked.

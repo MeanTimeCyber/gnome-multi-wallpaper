@@ -20,6 +20,7 @@ Whilst there are some good wallpaper managers for GNOME, none I could find deal 
 - Larger, better-fitting images are preferred
 - Automatic wallpaper rotation once every 24 hours from the last change
 - Manual "Change now" action in preferences; changing the folder also rotates immediately
+- Rebuilds the composite after monitor changes and after unlocking the lock screen, so the layout matches the displays again
 
 ## Requirements
 

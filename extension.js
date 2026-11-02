@@ -23,7 +23,17 @@ export default class MultiWallpaperExtension extends Extension {
         this._folderChangedId = this._settings.connect('changed::wallpaper-folder', () => this._rotate());
 
         // The composite is sized to the current layout, so rebuild it after displays are added or removed.
-        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => this._scheduleMonitorRotate());
+        this._monitorsChangedId = Main.layoutManager.connect('monitors-changed', () => this._scheduleRotate());
+
+        // Unlocking can reset the displays without a monitors-changed signal, which leaves the composite misaligned.
+        try {
+            this._screenShieldId = Main.screenShield?.connect('active-changed', () => {
+                if (!Main.screenShield.active)
+                    this._scheduleRotate();
+            }) ?? 0;
+        } catch (error) {
+            logError('Lock screen signal unavailable', error.message);
+        }
 
         // Keep the timer alive even if one check throws, so a single failure cannot stop future rotations.
         this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CHECK_INTERVAL_SECONDS, () => {
@@ -51,6 +61,10 @@ export default class MultiWallpaperExtension extends Extension {
             Main.layoutManager.disconnect(this._monitorsChangedId);
             this._monitorsChangedId = 0;
         }
+        if (this._screenShieldId) {
+            Main.screenShield?.disconnect(this._screenShieldId);
+            this._screenShieldId = 0;
+        }
         if (this._settings && this._folderChangedId)
             this._settings.disconnect(this._folderChangedId);
         this._folderChangedId = 0;
@@ -59,8 +73,8 @@ export default class MultiWallpaperExtension extends Extension {
         log('Extension disabled');
     }
 
-    // Debounced because monitors-changed can fire several times while a layout settles.
-    _scheduleMonitorRotate() {
+    // Debounced because monitors-changed can fire several times while a layout settles, and unlock can follow a display reset.
+    _scheduleRotate() {
         if (this._monitorTimerId)
             GLib.Source.remove(this._monitorTimerId);
 
