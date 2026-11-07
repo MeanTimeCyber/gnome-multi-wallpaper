@@ -11,5 +11,10 @@
       <summary>Last wallpaper change timestamp</summary>
       <description>Unix timestamp of the most recent wallpaper rotation.</description>
     </key>
+    <key type="s" name="last-layout">
+      <default>""</default>
+      <summary>Screen layout of last rotation</summary>
+      <description>Signature of the screens the current spanned wallpaper was built for.</description>
+    </key>
   </schema>
 </schemalist>

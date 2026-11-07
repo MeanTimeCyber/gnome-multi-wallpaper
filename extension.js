@@ -3,7 +3,7 @@
 import GLib from 'gi://GLib';
 import * as Main from 'resource:///org/gnome/shell/ui/main.js';
 import {Extension} from 'resource:///org/gnome/shell/extensions/extension.js';
-import {EXTENSION_SCHEMA, ROTATION_SECONDS, isCompositeMissing, log, logError, startRotation} from './lib/wallpaperLogic.js';
+import {EXTENSION_SCHEMA, ROTATION_SECONDS, getLogicalScreens, isCompositeMissing, layoutSignature, log, logError, startRotation} from './lib/wallpaperLogic.js';
 
 const CHECK_INTERVAL_SECONDS = 60;
 const RETRY_SECONDS = 60 * 60;
@@ -34,6 +34,9 @@ export default class MultiWallpaperExtension extends Extension {
         } catch (error) {
             logError('Lock screen signal unavailable', error.message);
         }
+
+        // Login is the first enable; rebuild if the screens differ from the layout the saved wallpaper was built for.
+        this._checkLayoutOnLogin();
 
         // Keep the timer alive even if one check throws, so a single failure cannot stop future rotations.
         this._timerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, CHECK_INTERVAL_SECONDS, () => {
@@ -83,6 +86,15 @@ export default class MultiWallpaperExtension extends Extension {
             this._rotate();
             return GLib.SOURCE_REMOVE;
         });
+    }
+
+    _checkLayoutOnLogin() {
+        const screens = getLogicalScreens(Main.layoutManager.monitors ?? []);
+        if (screens.length === 0)
+            return;
+
+        if (this._settings.get_string('last-layout') !== layoutSignature(screens))
+            this._scheduleRotate();
     }
 
     _checkDue() {
